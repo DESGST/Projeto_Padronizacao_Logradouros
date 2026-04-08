@@ -8,7 +8,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 # ================= CONFIGURAÇÕES =================
 # O arquivo que você baixa a cada quinzena (contém TUDO ou apenas o mês novo)
-ARQUIVO_ENTRADA_NOVO = r"\\cet-020059\DES_Dados\Dados\ARQUIVO DE CÓDIGOS\Funções Compartilhadas\DB_DES\data\infosiga\planilhas_infosiga\sinistros_infosiga_2026-02-20_14-29.xlsx"
+ARQUIVO_ENTRADA_NOVO = r"\\cet-020059\DES_Dados\Dados\ARQUIVO DE CÓDIGOS\Funções Compartilhadas\DB_DES\data\infosiga\planilhas_infosiga\sinistros_infosiga_2026-04-06_12-17.xlsx"
 
 # O seu "Banco de Dados" Mestre (onde ficam os dados já tratados acumulados)
 ARQUIVO_HISTORICO_MESTRE = r"\\cet-020059\DES_Dados\Dados\ARQUIVO DE CÓDIGOS\Funções Compartilhadas\DB_DES\data\cet\dados_cet_pre_tratados.xlsx"
