@@ -8,9 +8,10 @@ GEOCODE_LATLON_URL = "http://cetaplica/geosoap/geocode.asmx"
 GEOSERVER_WMS_URL = "http://cet-inf7242:8080/geoserver/sqlProducao/wms"
 
 # ========== CONFIGURAÇÕES DE ARQUIVOS ==========
-CADASTRO_PATH = r"\\cet-020059\DES_Dados\Dados\ARQUIVO DE CÓDIGOS\Modulos_de_tratamento_de_dados\CÓDIGOS_EM_USO\Projeto_Padronizacao_Logradouros\ARQUIVOS_DE_APOIO\cadastroRuas_V5_13_10_2025.xlsx"
-SHAPEFILE_SP_PATH = r"\\cet-020059\DES_Dados\Dados\ARQUIVO DE CÓDIGOS\Modulos_de_tratamento_de_dados\CÓDIGOS_EM_USO\Projeto_Padronizacao_Logradouros\ARQUIVOS_DE_APOIO\vwBlCET_det_get_distrito_sub_4326\LIMITE_MUNICIPAL_4674.shp"
+# ========== CONFIGURAÇÕES DE ARQUIVOS ==========
 
+CADASTRO_PATH = r"\\cetarea.file.core.windows.net\gid\DDE\Central de Arquivos\Dados\ARQUIVO DE CÓDIGOS\Modulos_de_tratamento_de_dados\CÓDIGOS_EM_USO\Projeto_Padronizacao_Logradouros\ARQUIVOS_DE_APOIO\cadastroRuas_V5_13_10_2025.xlsx"
+SHAPEFILE_SP_PATH = r"\\cetarea.file.core.windows.net\gid\DDE\Central de Arquivos\Dados\ARQUIVO DE CÓDIGOS\Modulos_de_tratamento_de_dados\CÓDIGOS_EM_USO\Projeto_Padronizacao_Logradouros\ARQUIVOS_DE_APOIO\vwBlCET_det_get_distrito_sub_4326\LIMITE_MUNICIPAL_4674.shp"
 # ========== TERMOS BASE - ÚNICA LISTA ==========
 _TERMOS_BASE = {
     "EDISON", "RUA EDISON", 
