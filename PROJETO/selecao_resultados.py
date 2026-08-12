@@ -33,38 +33,181 @@ VIAS_PROBLEMATICAS = {
 
 # ========== FUNÇÕES DE PRIORIZAÇÃO ==========
 
+# def _priorizar_por_correspondencia_tipo(df: pd.DataFrame, termo_original: str) -> pd.DataFrame:
+#     """
+#     Prioriza resultados que correspondem ao tipo de via buscado
+#     """
+#     if df.empty or len(df) <= 1:
+#         return df
+    
+#     termo_upper = termo_original.upper().strip()
+    
+#     # Identificar qual tipo de via está sendo buscado
+#     tipo_buscado = None
+#     for tipo_via in TIPOS_VIA:
+#         if tipo_via in termo_upper and len(tipo_via) > 2:
+#             tipo_buscado = tipo_via
+#             break
+    
+#     if not tipo_buscado:
+#         return df
+    
+#     # Verificar se temos resultados do tipo buscado
+#     resultados_tipo_buscado = df[df["tipo"].str.upper() == tipo_buscado]
+    
+#     if not resultados_tipo_buscado.empty:
+#         logging.info(f"🎯 Priorizando {len(resultados_tipo_buscado)} resultado(s) do tipo '{tipo_buscado}'")
+        
+#         if "distancia_km" in df.columns:
+#             resultados_tipo_buscado = resultados_tipo_buscado.sort_values("distancia_km", ascending=True)
+        
+#         return resultados_tipo_buscado
+    
+#     return df
+
 def _priorizar_por_correspondencia_tipo(df: pd.DataFrame, termo_original: str) -> pd.DataFrame:
     """
-    Prioriza resultados que correspondem ao tipo de via buscado
+    Prioriza resultados que correspondem ao tipo de via buscado,
+    DANDO PESO MÁXIMO para Estruturas, e garantindo que o TIPO EXATO ganhe de acessos.
     """
     if df.empty or len(df) <= 1:
         return df
     
     termo_upper = termo_original.upper().strip()
     
-    # Identificar qual tipo de via está sendo buscado
+    # 1. 🚨 FILA VIP (ALTA PRIORIDADE)
+    estruturas_prioritarias = {
+        "PONTE": ["PONTE", "PTE"],
+        "VIADUTO": ["VIADUTO", "VD"],
+        "TUNEL": ["TUNEL", "TÚNEL"],
+        "ACESSO": ["ACESSO", "AC", "AC A"],
+        "PRACA": ["PRACA", "PRAÇA", "PC", "PR"],
+        "LARGO": ["LARGO", "LG"],
+        "PASSARELA": ["PASSARELA", "PASS"],
+        "COMPLEXO": ["COMPLEXO", "CV"],
+        "TERMINAL": ["TERMINAL", "TERM"],
+        "METRO": ["METRO", "METRÔ", "ESTACAO", "ESTAÇÃO"]
+    }
+    
+    tipo_estrutura_encontrado = None
+    siglas_validas = []
+    
+    for nome_completo, siglas in estruturas_prioritarias.items():
+        if f" {nome_completo} " in f" {termo_upper} " or any(f" {sigla} " in f" {termo_upper} " for sigla in siglas):
+            tipo_estrutura_encontrado = nome_completo
+            siglas_validas = siglas
+            break
+            
+    if tipo_estrutura_encontrado:
+        logging.info(f"🚨 ALTA PRIORIDADE: Estrutura '{tipo_estrutura_encontrado}' detectada.")
+        
+        padrao_regex = r'\b(?:' + '|'.join(siglas_validas) + r')\b'
+        
+        # Filtra tudo que tenha a ver com a estrutura (ex: Pontes e Acessos à ponte)
+        mask_estrutura = df["tipo"].str.upper().isin(siglas_validas) | \
+                         df["logradouro_PMSP"].str.upper().str.contains(padrao_regex, regex=True)
+        
+        df_estruturas = df[mask_estrutura].copy()
+        
+        if not df_estruturas.empty:
+            # ⭐ O DESEMPATE DE OURO: Verifica se a via COMEÇA exatamente com a sigla buscada.
+            # Assim, "PTE FREGUESIA..." (Estrela Dourada) ganha de "AC A PTE FREGUESIA..." (Estrela de Prata)
+            padrao_inicio = r'^(?:' + '|'.join(siglas_validas) + r')\b'
+            df_estruturas['match_exato'] = df_estruturas['logradouro_PMSP'].str.upper().str.contains(padrao_inicio, regex=True)
+            
+            # Ordena PRIMEIRO pelo match exato (True em cima) e SÓ DEPOIS pela distância
+            if "distancia_km" in df_estruturas.columns:
+                df_estruturas = df_estruturas.sort_values(
+                    by=["match_exato", "distancia_km"], 
+                    ascending=[False, True]
+                )
+            else:
+                df_estruturas = df_estruturas.sort_values(
+                    by=["match_exato"], 
+                    ascending=[False]
+                )
+            
+            # Remove a coluna temporária de desempate para não sujar sua planilha
+            df_estruturas = df_estruturas.drop(columns=['match_exato'])
+            
+            return df_estruturas
+
+    # 2. Lógica normal para Ruas, Avenidas, Alamedas...
     tipo_buscado = None
     for tipo_via in TIPOS_VIA:
         if tipo_via in termo_upper and len(tipo_via) > 2:
             tipo_buscado = tipo_via
             break
-    
+            
     if not tipo_buscado:
         return df
-    
-    # Verificar se temos resultados do tipo buscado
+        
     resultados_tipo_buscado = df[df["tipo"].str.upper() == tipo_buscado]
     
     if not resultados_tipo_buscado.empty:
         logging.info(f"🎯 Priorizando {len(resultados_tipo_buscado)} resultado(s) do tipo '{tipo_buscado}'")
-        
         if "distancia_km" in df.columns:
             resultados_tipo_buscado = resultados_tipo_buscado.sort_values("distancia_km", ascending=True)
-        
         return resultados_tipo_buscado
-    
+        
     return df
 
+def _filtrar_melhor_embedding(df_embed: pd.DataFrame, endereco_original: str) -> pd.DataFrame:
+    """
+    Filtra resultados do embedding - COM FOCO NAS ESTRUTURAS
+    """
+    if df_embed.empty:
+        return df_embed
+    
+    termo_original = endereco_original.upper().strip()
+    resultados_relevantes = []
+    
+    # Dicionário expandido para o Embedding também reconhecer a prioridade
+    termos_estrutura = {
+        "PONTE", "PTE", "VIADUTO", "VD", "TUNEL", "PASSARELA", "TRAVESSIA", 
+        "ACESSO", "AC", "PRACA", "PC", "LARGO", "LG", "METRO", "TERMINAL", "ESTACAO"
+    }
+    tem_termo_estrutura = any(f" {termo} " in f" {termo_original} " for termo in termos_estrutura)
+    
+    for _, row in df_embed.iterrows():
+        logradouro = str(row.get('logradouro_PMSP', '')).upper()
+        similaridade = row.get('similaridade', 0)
+        
+        tokens_original = set(re.findall(r'\w+', termo_original))
+        tokens_logradouro = set(re.findall(r'\w+', logradouro))
+        tokens_comuns = tokens_original.intersection(tokens_logradouro)
+        
+        # Se for estrutura (Ponte, Praça, Metrô), somos mais "carinhosos" com a nota de similaridade
+        if tem_termo_estrutura:
+            criterio_aprovado = (
+                similaridade > 50 or  # Aceita notas baixinhas se for estrutura
+                len(tokens_comuns) >= 1 or  
+                any(token in logradouro for token in tokens_original if len(token) > 3)
+            )
+        else:
+            criterio_aprovado = (
+                similaridade > 60 or
+                len(tokens_comuns) >= 2 or
+                termo_original in logradouro
+            )
+            
+        if criterio_aprovado:
+            resultados_relevantes.append(row)
+            logging.debug(f"✅ Embedding aprovado: {logradouro} (sim: {similaridade})")
+            
+    if resultados_relevantes:
+        df_resultado = pd.DataFrame(resultados_relevantes)
+        
+        # Força a priorização estrutural (a Fila VIP) também no embedding
+        df_resultado = _priorizar_por_correspondencia_tipo(df_resultado, termo_original)
+        
+        logging.info(f"🎯 Filtro embedding: {len(df_resultado)} resultados relevantes")
+        return df_resultado
+    else:
+        logging.debug("❌ Nenhum resultado do embedding passou no filtro")
+        return pd.DataFrame()
+
+    
 def _priorizar_por_tipo_especifico(df: pd.DataFrame, tipo_buscado: str) -> pd.DataFrame:
     """
     Prioriza resultados que correspondem ao tipo de via originalmente buscado
@@ -141,54 +284,54 @@ def _filtrar_resultados_relevantes(df: pd.DataFrame, termo_original: str) -> pd.
     
     return pd.DataFrame(resultados_relevantes)
 
-def _filtrar_melhor_embedding(df_embed: pd.DataFrame, endereco_original: str) -> pd.DataFrame:
-    """
-    Filtra resultados do embedding - CORREÇÃO MAIS FLEXÍVEL
-    """
-    if df_embed.empty:
-        return df_embed
+# def _filtrar_melhor_embedding(df_embed: pd.DataFrame, endereco_original: str) -> pd.DataFrame:
+#     """
+#     Filtra resultados do embedding - CORREÇÃO MAIS FLEXÍVEL
+#     """
+#     if df_embed.empty:
+#         return df_embed
     
-    termo_original = endereco_original.upper().strip()
-    resultados_relevantes = []
+#     termo_original = endereco_original.upper().strip()
+#     resultados_relevantes = []
     
-    # Termos que indicam estruturas específicas (como "ponte")
-    termos_estrutura = {"PONTE", "VIADUTO", "TUNEL", "PASSARELA", "TRAVESSIA"}
-    tem_termo_estrutura = any(termo in termo_original for termo in termos_estrutura)
+#     # Termos que indicam estruturas específicas (como "ponte")
+#     termos_estrutura = {"PONTE", "VIADUTO", "TUNEL", "PASSARELA", "TRAVESSIA"}
+#     tem_termo_estrutura = any(termo in termo_original for termo in termos_estrutura)
     
-    for _, row in df_embed.iterrows():
-        logradouro = str(row.get('logradouro_PMSP', '')).upper()
-        similaridade = row.get('similaridade', 0)
+#     for _, row in df_embed.iterrows():
+#         logradouro = str(row.get('logradouro_PMSP', '')).upper()
+#         similaridade = row.get('similaridade', 0)
         
-        # Critérios MAIS FLEXÍVEIS para embedding
-        tokens_original = set(re.findall(r'\w+', termo_original))
-        tokens_logradouro = set(re.findall(r'\w+', logradouro))
-        tokens_comuns = tokens_original.intersection(tokens_logradouro)
+#         # Critérios MAIS FLEXÍVEIS para embedding
+#         tokens_original = set(re.findall(r'\w+', termo_original))
+#         tokens_logradouro = set(re.findall(r'\w+', logradouro))
+#         tokens_comuns = tokens_original.intersection(tokens_logradouro)
         
-        # Para termos de estrutura (ponte, viaduto), ser mais flexível
-        if tem_termo_estrutura:
-            criterio_aprovado = (
-                similaridade > 50 or  # Limite muito mais baixo
-                len(tokens_comuns) >= 1 or  # Apenas 1 token em comum
-                any(token in logradouro for token in tokens_original if len(token) > 3)
-            )
-        else:
-            criterio_aprovado = (
-                similaridade > 60 or
-                len(tokens_comuns) >= 2 or
-                termo_original in logradouro
-            )
+#         # Para termos de estrutura (ponte, viaduto), ser mais flexível
+#         if tem_termo_estrutura:
+#             criterio_aprovado = (
+#                 similaridade > 50 or  # Limite muito mais baixo
+#                 len(tokens_comuns) >= 1 or  # Apenas 1 token em comum
+#                 any(token in logradouro for token in tokens_original if len(token) > 3)
+#             )
+#         else:
+#             criterio_aprovado = (
+#                 similaridade > 60 or
+#                 len(tokens_comuns) >= 2 or
+#                 termo_original in logradouro
+#             )
         
-        if criterio_aprovado:
-            resultados_relevantes.append(row)
-            logging.debug(f"✅ Embedding aprovado: {logradouro} (sim: {similaridade})")
+#         if criterio_aprovado:
+#             resultados_relevantes.append(row)
+#             logging.debug(f"✅ Embedding aprovado: {logradouro} (sim: {similaridade})")
     
-    if resultados_relevantes:
-        df_resultado = pd.DataFrame(resultados_relevantes)
-        logging.info(f"🎯 Filtro embedding: {len(df_resultado)} resultados relevantes")
-        return df_resultado
-    else:
-        logging.debug("❌ Nenhum resultado do embedding passou no filtro")
-        return pd.DataFrame()
+#     if resultados_relevantes:
+#         df_resultado = pd.DataFrame(resultados_relevantes)
+#         logging.info(f"🎯 Filtro embedding: {len(df_resultado)} resultados relevantes")
+#         return df_resultado
+#     else:
+#         logging.debug("❌ Nenhum resultado do embedding passou no filtro")
+#         return pd.DataFrame()
 
 # ========== FUNÇÕES DE AVALIAÇÃO ==========
 
