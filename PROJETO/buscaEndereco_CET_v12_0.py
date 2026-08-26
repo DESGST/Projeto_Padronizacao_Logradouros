@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional, Tuple, List
 import time
 import requests
 import pandas as pd
+import re
 
 # Import dos módulos modularizados
 from busca_terminais_e_estacoes import filtrar_dataframe_transporte, eh_ponto_transporte
@@ -543,10 +544,26 @@ def _processar_coordenadas_resultado(df: pd.DataFrame, endereco: str, numero: st
             df = df_priorizado
     
     else:
+        # Quando NÃO temos o GPS (Latitude/Longitude VAZIOS)
         df["distancia_km"] = None
         if "similaridade" in df.columns and "_fonte_busca" in df.columns:
             df["_ordem_fonte"] = df["_fonte_busca"].map(ORDEM_PRIORIDADE_FONTES).fillna(6)
-            df = df.sort_values(["similaridade", "_ordem_fonte"], ascending=[False, True]).drop("_ordem_fonte", axis=1)
+            
+            # 🌟 NOVO: O DESEMPATE MÁGICO DO NOME EXATO!
+            if 'logradouro_PMSP' in df.columns:
+                # Isola apenas o nome (ex: Tira o "RUA" de "RUA VERGUEIRO")
+                nome_buscado = " ".join(endereco.upper().strip().split()[1:]) if len(endereco.split()) > 1 else endereco.upper().strip()
+                
+                # Checa se o nome oficial bate exatamente com o nome buscado (ignorando R, AV, etc)
+                df['match_nome_exato'] = df['logradouro_PMSP'].apply(
+                    lambda x: " ".join(str(x).upper().strip().split()[1:]) == nome_buscado if len(str(x).split()) > 1 else str(x).upper().strip() == nome_buscado
+                )
+                
+                # A Nova Ordem: 1º Quem tem nome exato, 2º Similaridade, 3º Fonte
+                df = df.sort_values(by=["match_nome_exato", "similaridade", "_ordem_fonte"], ascending=[False, False, True])
+                df = df.drop(columns=["_ordem_fonte", "match_nome_exato"])
+            else:
+                df = df.sort_values(["similaridade", "_ordem_fonte"], ascending=[False, True]).drop("_ordem_fonte", axis=1)
     
     return df.head(max_candidatos)
 
@@ -729,7 +746,7 @@ def _buscar_direta_inteligente(endereco: str, numero: str = "", lat_origem: floa
 
 def buscar_endereco_candidatos(endereco: str, numero: str = "", lat_origem: float = None, lon_origem: float = None, max_candidatos: int = 35) -> pd.DataFrame:
     """
-    Busca RÁPIDA OTIMIZADA - CORREÇÃO: Verificar filtro ANTES da busca
+    Busca RÁPIDA OTIMIZADA - CORREÇÃO: Intercepta Marginais na raiz!
     """
     if not endereco or endereco.strip() == "":
         return pd.DataFrame([{"logradouro_PMSP": "NAO ENCONTRADO"}])
@@ -739,6 +756,21 @@ def buscar_endereco_candidatos(endereco: str, numero: str = "", lat_origem: floa
         return pd.DataFrame([{"logradouro_PMSP": "NAO ENCONTRADO"}])
     
     endereco_upper = endereco.upper().strip()
+    
+    # =========================================================================
+    # 🚨 A FILA VIP DAS MARGINAIS (Resolve o problema da SP 015 instantaneamente)
+    # =========================================================================
+    tipo_marginal = detectar_marginal(endereco_upper)
+    if tipo_marginal:
+        logging.info(f"🎯 Marginal interceptada na raiz: {tipo_marginal} - Roteando para a via expressa!")
+        df_marginal = _buscar_em_marginal(tipo_marginal, numero)
+        if not df_marginal.empty:
+            df_marginal = df_marginal.rename(columns={"latitude": "latitude_geocode", "longitude": "longitude_geocode"})
+            df_marginal = _adicionar_metadados_busca(df_marginal, "VIAS_COMPLEXAS", 100)
+            df_marginal_proc = _processar_coordenadas_resultado(df_marginal, endereco, numero, lat_origem, lon_origem, max_candidatos)
+            return _limpar_colunas_resultado(df_marginal_proc)
+    # =========================================================================
+
     if endereco_upper in _TERMOS_BASE:
         logging.info(f"🎯 VIA PROBLEMÁTICA DETECTADA: '{endereco}' - usando APENAS embedding")
         df_embedding = _buscar_por_embedding(endereco, numero)
@@ -1019,11 +1051,72 @@ def enriquecer_candidatos_geoserver(df_candidatos: pd.DataFrame) -> pd.DataFrame
 
 # ========== FUNÇÕES PRINCIPAIS DE INTERFACE ==========
 
+def _padronizar_tipos_complexos(endereco: str) -> str:
+    """
+    Padroniza o tipo de via usando 'De-Para' para inconsistências da PMSP e apelidos famosos.
+    """
+    if not isinstance(endereco, str):
+        return endereco
+        
+    end_upper = endereco.upper().strip()
+    
+    apelidos_para_oficial = {
+
+        "JACU PESSEGO AVENIDA JACUPESSEGO VILA JACUI": "AVENIDA JACU PESSEGO",
+        "ACESSO JACU PESSEGO / NOVA TRABALHADORES": "ACESSO AVENIDA JACU PESSEGO",
+        "JACUPESSEGO": "JACU PESSEGO",
+        "JACU-PESSEGO": "JACU PESSEGO",
+        "PRESIDENTE PRESIDENTE": "PRESIDENTE",
+        "PRES PRESIDENTE": "PRESIDENTE",
+        "CASTELLO": "CASTELO",        
+        "SP 015 - TIETE": "MARGINAL TIETE",
+        "SP 015 - PINHEIROS": "MARGINAL PINHEIROS",
+        "SP 015 TIETE": "MARGINAL TIETE",
+        "SP 015 PINHEIROS": "MARGINAL PINHEIROS",
+        "SP-015 TIETE": "MARGINAL TIETE",
+        "SP-015 PINHEIROS": "MARGINAL PINHEIROS",
+        "SP 15 - TIETE": "MARGINAL TIETE",
+        "SP 15 - PINHEIROS": "MARGINAL PINHEIROS",
+        "SP 15 TIETE": "MARGINAL TIETE",
+        "SP 15 PINHEIROS": "MARGINAL PINHEIROS",
+        "SP 280": "AV MARGINAL DIREITA DO TIETE",
+        "SP-280": "AV MARGINAL DIREITA DO TIETE",
+        "ACESSO PONTE ESTAIADA": "AC A PTE OCTAVIO FRIAS DE OLIVEIRA",
+        "AC PONTE ESTAIADA": "AC A PTE OCTAVIO FRIAS DE OLIVEIRA",
+        "ACESSO PONTE DO SOCORRO": "AC A PTE SANTO DIAS DA SILVA",
+        "AC PONTE DO SOCORRO": "AC A PTE SANTO DIAS DA SILVA",
+        "PONTE ESTAIADA": "PONTE OCTAVIO FRIAS DE OLIVEIRA",
+        "PONTE DO SOCORRO": "PONTE SANTO DIAS DA SILVA",
+        "TUNEL ANHANGABAU": "TN PAPA JOAO PAULO II",
+        "TUNEL MARIA MALUF": "COMPLEXO VIARIO MARIA MALUF",
+        "TUNEL AYRTON SENNA": "COMPLEXO VIARIO AYRTON SENNA",
+        "TUNEL TRIBUNAL DE JUSTICA": "COMPLEXO VIARIO TRIBUNAL DE JUSTICA",
+        "TUNEL JOAO JORGE SAAD": "COMPLEXO VIARIO JOAO JORGE SAAD",
+    }
+    
+    for apelido, oficial in apelidos_para_oficial.items():
+        if apelido in end_upper:
+            end_upper = end_upper.replace(apelido, oficial)
+    
+    # Regra sistêmica para o que é padrão
+    end_upper = re.sub(r'^ESTR\b', 'ESTRADA', end_upper)
+    
+    return end_upper
+
+
+# ========== FUNÇÕES PRINCIPAIS DE INTERFACE ==========
+
 def buscar_endereco_enriquecido(endereco: str, numero: str = "", lat_origem: float = None, lon_origem: float = None, max_candidatos: int = 35) -> pd.DataFrame:
     """
     Busca COMPLETA - com enriquecimento GEOSERVER
     """
-    df_candidatos = buscar_endereco_candidatos(endereco, numero, lat_origem, lon_origem, max_candidatos)
+    
+    # === 1. APLICA A NOSSA REGRA INTELIGENTE AQUI ===
+    endereco_corrigido = _padronizar_tipos_complexos(endereco)
+    
+    # === 2. MANDA O ENDEREÇO CORRIGIDO PARA A BUSCA ===
+    df_candidatos = buscar_endereco_candidatos(endereco_corrigido, numero, lat_origem, lon_origem, max_candidatos)
+    
     return enriquecer_candidatos_geoserver(df_candidatos)
 
 # ========== FUNÇÕES DE COMPATIBILIDADE ==========

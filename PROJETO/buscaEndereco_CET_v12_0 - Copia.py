@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional, Tuple, List
 import time
 import requests
 import pandas as pd
+import re
 
 # Import dos módulos modularizados
 from busca_terminais_e_estacoes import filtrar_dataframe_transporte, eh_ponto_transporte
@@ -1008,15 +1009,61 @@ def enriquecer_candidatos_geoserver(df_candidatos: pd.DataFrame) -> pd.DataFrame
     return df_enriquecido
 
 # ========== FUNÇÕES PRINCIPAIS DE INTERFACE ==========
+def _padronizar_tipos_complexos(endereco: str) -> str:
+    """
+    Padroniza o tipo de via no início da string, 
+    transformando Túneis em Complexos Viários para o banco da CET.
+    """
+    if not isinstance(endereco, str):
+        return endereco
+        
+    end_upper = endereco.upper().strip()
+    
+    # Transforma "TUNEL MARIA MALUF" em "COMPLEXO VIARIO MARIA MALUF"
+    end_upper = re.sub(r'^T[UÚ]NEL\b', 'COMPLEXO VIARIO', end_upper)
+    
+    # Transforma "ESTR" em "ESTRADA"
+    end_upper = re.sub(r'^ESTR\b', 'ESTRADA', end_upper)
+    
+    return end_upper
+
+# ========== FUNÇÕES PRINCIPAIS DE INTERFACE ==========
 
 def buscar_endereco_enriquecido(endereco: str, numero: str = "", lat_origem: float = None, lon_origem: float = None, max_candidatos: int = 35) -> pd.DataFrame:
     """
     Busca COMPLETA - com enriquecimento GEOSERVER
     """
-    df_candidatos = buscar_endereco_candidatos(endereco, numero, lat_origem, lon_origem, max_candidatos)
+    
+    # === 1. APLICA A NOSSA REGRA INTELIGENTE AQUI ===
+    endereco_corrigido = _padronizar_tipos_complexos(endereco)
+    
+    # === 2. MANDA O ENDEREÇO CORRIGIDO PARA A BUSCA ===
+    df_candidatos = buscar_endereco_candidatos(endereco_corrigido, numero, lat_origem, lon_origem, max_candidatos)
+    
     return enriquecer_candidatos_geoserver(df_candidatos)
 
 # ========== FUNÇÕES DE COMPATIBILIDADE ==========
 
 buscar_endereco_com_coordenadas = buscar_endereco_candidatos
 buscar_endereco_completo = buscar_endereco_enriquecido
+
+def _padronizar_tipos_complexos(endereco: str) -> str:
+    """
+    Solução Sistêmica: Padroniza o tipo de via no início da string, 
+    sem precisar gravar o nome de cada túnel da cidade.
+    """
+    if not isinstance(endereco, str):
+        return endereco
+        
+    end_upper = endereco.upper().strip()
+    
+    # O acento circunflexo (^) significa "SOMENTE SE ESTIVER NO COMEÇO DA FRASE"
+    # Assim, ele transforma "TUNEL MARIA MALUF" em "COMPLEXO VIARIO MARIA MALUF"
+    # Mas NÃO estraga "RUA DO TUNEL" (pois a palavra túnel está no final)
+    
+    end_upper = re.sub(r'^T[UÚ]NEL\b', 'COMPLEXO VIARIO', end_upper)
+    
+    # Podemos usar a mesma inteligência para outras siglas comuns que dão problema
+    end_upper = re.sub(r'^ESTR\b', 'ESTRADA', end_upper)
+    
+    return end_upper
