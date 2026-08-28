@@ -55,7 +55,7 @@ TIPOS_VIA_ORDENADOS = sorted(
 TERMOS_ESTRUTURA = frozenset({
     "PONTE", "PTE", "VIADUTO", "VD", "TUNEL", "PASSARELA", "TRAVESSIA",
     "ACESSO", "AC", "PRACA", "PC", "LARGO", "LG", "METRO", "TERMINAL", "ESTACAO",
-    "COMPLEXO", "CV", "ESTRADA", "ES", "EST", "ESTR",
+    "COMPLEXO", "CV", "ESTRADA", "ES", "EST", "ESTR","RETORNO", "RT"
 })
 
 # Mapeamento de estruturas prioritárias para as siglas CET que as representam.
@@ -64,6 +64,7 @@ TERMOS_ESTRUTURA = frozenset({
 ESTRUTURAS_PRIORITARIAS = [
     ("ACESSO",   ["ACESSO", "AC", "AC A"]),
     ("PONTE",    ["PONTE", "PTE", "CV", "COMPLEXO"]),
+    ("RETORNO",  ["RETORNO", "RT", "RT A"]),
     ("VIADUTO",  ["VIADUTO", "VD", "CV", "COMPLEXO"]),
     ("TUNEL",    ["TUNEL", "TÚNEL", "TN", "CV", "COMPLEXO"]),
     ("COMPLEXO", ["COMPLEXO", "CV"]),
@@ -126,83 +127,79 @@ COLUNAS_INTERNAS = frozenset({"tipo", "titulo", "preposicao", "nome", "LOCAL", "
 def _priorizar_por_correspondencia_tipo(df: pd.DataFrame, termo_original: str) -> pd.DataFrame:
     """
     Prioriza resultados que correspondem ao tipo de via buscado.
-
-    Para estruturas especiais (Pontes, Túneis, Viadutos, etc.), aplica a lógica
-    de 'Fila VIP': acha as linhas cujo tipo ou nome bate com as siglas esperadas
-    e ordena pelo match exato com o início do logradouro, desempatando por distância.
-
-    Para vias comuns, filtra pelo tipo encontrado no termo e ordena por distância.
-
-    Manutencao: a precedência entre estruturas é controlada pela ordem de
-    ESTRUTURAS_PRIORITARIAS. Se uma estrutura estiver sendo confundida com outra,
-    reordene lá, não aqui.
+    COM BLOQUEIO ABSOLUTO: Se busca "Acesso", PROÍBE retornar a via principal!
     """
-    if df.empty or len(df) <= 1:
+    if df.empty:
         return df
-
+    
     termo_upper = termo_original.upper().strip()
-
-    # --- Fila VIP: estruturas especiais ---
-    tipo_encontrado = None
-    siglas_validas  = []
-
-    for nome_completo, siglas in ESTRUTURAS_PRIORITARIAS:
-        termo_com_bordas = f" {termo_upper} "
-        if (f" {nome_completo} " in termo_com_bordas
-                or any(f" {s} " in termo_com_bordas for s in siglas)):
-            tipo_encontrado = nome_completo
-            siglas_validas  = siglas
+    
+    # 1. FILA VIP (ALTA PRIORIDADE)
+    estruturas_prioritarias = {
+        "ACESSO": ["ACESSO", "AC", "AC A"],
+        "PONTE": ["PONTE", "PTE", "CV", "COMPLEXO"],
+        "VIADUTO": ["VIADUTO", "VD", "CV", "COMPLEXO"],
+        "TUNEL": ["TUNEL", "TÚNEL", "TN", "CV", "COMPLEXO"],
+        "COMPLEXO": ["COMPLEXO", "CV"],
+        "PRACA": ["PRACA", "PRAÇA", "PC", "PR"],
+        "LARGO": ["LARGO", "LG"],
+        "PASSARELA": ["PASSARELA", "PASS"],
+        "ESTRADA": ["ESTRADA", "ES", "EST", "ESTR"],
+        "TERMINAL": ["TERMINAL", "TERM"],
+        "METRO": ["METRO", "METRÔ", "ESTACAO", "ESTAÇÃO"]
+    }
+    
+    tipo_estrutura_encontrado = None
+    siglas_validas = []
+    
+    for nome_completo, siglas in estruturas_prioritarias.items():
+        if f" {nome_completo} " in f" {termo_upper} " or any(f" {sigla} " in f" {termo_upper} " for sigla in siglas):
+            tipo_estrutura_encontrado = nome_completo
+            siglas_validas = siglas
             break
-
-    if tipo_encontrado:
-        logging.info(f"[PRIORIDADE] Estrutura '{tipo_encontrado}' detectada no termo.")
-
-        padrao_tipo   = re.compile(r'\b(?:' + '|'.join(re.escape(s) for s in siglas_validas) + r')\b')
-        padrao_inicio = re.compile(r'^(?:' + '|'.join(re.escape(s) for s in siglas_validas) + r')\b')
-
-        mask_estrutura = (
-            df["tipo"].str.upper().apply(lambda t: bool(padrao_tipo.search(t)))
-            | df["logradouro_PMSP"].str.upper().apply(lambda l: bool(padrao_tipo.search(l)))
-        )
+            
+    if tipo_estrutura_encontrado:
+        padrao_regex = r'\b(?:' + '|'.join(siglas_validas) + r')\b'
+        mask_estrutura = df["tipo"].str.upper().isin(siglas_validas) | \
+                         df["logradouro_PMSP"].str.upper().str.contains(padrao_regex, regex=True)
+        
         df_estruturas = df[mask_estrutura].copy()
-
+        
+        # 🚨 A ARMADILHA COMEÇA AQUI
         if not df_estruturas.empty:
-            # Estrela Dourada: bate com o início do logradouro (match mais exato)
-            df_estruturas["_match_exato"] = (
-                df_estruturas["logradouro_PMSP"].str.upper().str.strip()
-                .apply(lambda l: bool(padrao_inicio.match(l)))
-            )
-
-            colunas_ordem  = ["_match_exato"]
-            ordem_crescente = [False]
+            # Se ele encontrou o acesso/ponte, ordena e retorna normalmente
+            padrao_inicio = r'^(?:' + '|'.join(siglas_validas) + r')\b'
+            df_estruturas['match_exato'] = df_estruturas['logradouro_PMSP'].str.upper().str.contains(padrao_inicio, regex=True)
+            
             if "distancia_km" in df_estruturas.columns:
-                colunas_ordem.append("distancia_km")
-                ordem_crescente.append(True)
-
-            df_estruturas = df_estruturas.sort_values(
-                by=colunas_ordem, ascending=ordem_crescente
-            ).drop(columns=["_match_exato"])
-
+                df_estruturas = df_estruturas.sort_values(["match_exato", "distancia_km"], ascending=[False, True])
+                
+            df_estruturas = df_estruturas.drop(columns=['match_exato'])
             return df_estruturas
-
-    # --- Lógica padrão para vias comuns ---
-    # Usa TIPOS_VIA_ORDENADOS (lista com ordem determinística) em vez do set TIPOS_VIA.
-    tipo_buscado = next(
-        (tipo for tipo in TIPOS_VIA_ORDENADOS if tipo in termo_upper),
-        None
-    )
-
+        else:
+            # 🚨 BLOQUEIO ABSOLUTO: Se o policial digitou "Acesso", mas a busca NÃO trouxe 
+            # nenhuma rua do tipo "Acesso" ou "AC", nós matamos o resultado!
+            # Isso impede que o "EXATO_SEM_TIPO" empurre a Avenida principal goela abaixo.
+            logging.debug(f"❌ Bloqueado! Buscava {tipo_estrutura_encontrado}, mas só achou vias normais.")
+            return pd.DataFrame() # Retorna vazio!
+ 
+    # 2. Lógica normal para as demais vias
+    tipo_buscado = None
+    for tipo_via in TIPOS_VIA:
+        if tipo_via in termo_upper and len(tipo_via) > 2:
+            tipo_buscado = tipo_via
+            break
+            
     if not tipo_buscado:
         return df
-
-    resultados_tipo = df[df["tipo"].str.upper() == tipo_buscado]
-
-    if not resultados_tipo.empty:
-        logging.info(f"[PRIORIDADE] {len(resultados_tipo)} resultado(s) do tipo '{tipo_buscado}'.")
+        
+    resultados_tipo_buscado = df[df["tipo"].str.upper() == tipo_buscado]
+    
+    if not resultados_tipo_buscado.empty:
         if "distancia_km" in df.columns:
-            resultados_tipo = resultados_tipo.sort_values("distancia_km")
-        return resultados_tipo
-
+            resultados_tipo_buscado = resultados_tipo_buscado.sort_values("distancia_km", ascending=True)
+        return resultados_tipo_buscado
+        
     return df
 
 
@@ -539,4 +536,4 @@ def _limpar_colunas_resultado(df: pd.DataFrame) -> pd.DataFrame:
     df = df.drop(columns=[c for c in colunas_remover if c in df.columns])
 
     colunas_finais = [c for c in COLUNAS_RESULTADO_FINAL if c in df.columns]
-    return df[colunas_finais] if colunas_finais else df
+    return df[colunas_finais] if colunas_finais else df 

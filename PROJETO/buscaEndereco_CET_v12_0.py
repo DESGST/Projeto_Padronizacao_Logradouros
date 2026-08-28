@@ -259,9 +259,16 @@ def remover_tipo_via(endereco: str) -> str:
     return endereco.strip()
 
 def detectar_marginal(endereco: str) -> Optional[str]:
-    """Detecta se é uma marginal"""
+    """Detecta se é uma marginal e envia para a busca rápida de Vias Complexas."""
     if not endereco: return None
     e = endereco.upper().strip()
+    
+    # =================================================================
+
+    if "MARGINAL DIREITA" in e or "MARGINAL ESQUERDA" in e:
+        return None
+    # =================================================================
+        
     e = re.sub(r"SP\s*0?-?\s*15", "SP 15", e)
     e = re.sub(r"[-/\s]+", " ", e)
     
@@ -269,10 +276,12 @@ def detectar_marginal(endereco: str) -> Optional[str]:
         if "TIETE" in e: return "TIETE"
         if "PINHEIROS" in e: return "PINHEIROS"
         return "AMBAS"
+    
     if "MARGINAL" in e:
         if "TIETE" in e: return "TIETE"
         if "PINHEIROS" in e: return "PINHEIROS"
         return "AMBAS"
+        
     if "RADIAL LESTE" in e: return "RADIAL LESTE"
     
     return None
@@ -1053,22 +1062,56 @@ def enriquecer_candidatos_geoserver(df_candidatos: pd.DataFrame) -> pd.DataFrame
 
 def _padronizar_tipos_complexos(endereco: str) -> str:
     """
-    Padroniza o tipo de via usando 'De-Para' para inconsistências da PMSP e apelidos famosos.
+    Padroniza o tipo de via usando 'De-Para' para inconsistências da PMSP, 
+    apelidos famosos e erros de digitação recorrentes na base do Infosiga.
     """
     if not isinstance(endereco, str):
         return endereco
         
     end_upper = endereco.upper().strip()
     
+    # Tabela De-Para (A ORDEM IMPORTA: O mais complexo primeiro)
     apelidos_para_oficial = {
+        # =================================================================
+        # 1. ERROS DE DIGITAÇÃO E SUJEIRAS DA PLANILHA INFOSIGA
+        # =================================================================
+        # Túneis bizarros e com nomes duplos
+        "TUNEL TUNEL": "TUNEL",
+        "TUNEL TÚNEL": "TUNEL",
+        "TUNEL FERNANDOVIEIRA DE MELLO": "TUNEL MINISTRO FERNANDO VIEIRA DE MELLO",
+        "TUNEL FERNANDO VIEIRA DE MELO": "TUNEL MINISTRO FERNANDO VIEIRA DE MELLO",
+        "TUNEL JOSRNALISTA ODON PEREIRA": "TUNEL JORNALISTA ODON PEREIRA",
+        "TUNEL SÃO JOÃO PAULO II": "TN PAPA JOAO PAULO II",
+        "TUNEL JOÃO PAULO II": "TN PAPA JOAO PAULO II",
+        "JOSE ROBERTO FANGANIELLO MELHEM SAIDA": "JOSE ROBERTO FANGANIELLO MELHEM",
+        "NOVE DE JULHO  CENTRO BAIRRO": "NOVE DE JULHO",
+        
+        # Acessos (Limpando o excesso de preposições e lixo no final)
+        "ACESSO PARA A ESTRADA": "ACESSO ESTRADA",
+        "ACESSO PARA O": "ACESSO",
+        "ACESSO  DO": "ACESSO DO",
+        "ACESSO  DE": "ACESSO DE",
+        "ACESSO AV JACU PESSEGO  MAUA": "ACESSO AVENIDA JACU PESSEGO",
+        
+        # Retornos e Pontes com sujeira
+        "SENTIDO TUNEL ANHAN": "", # Limpa a sujeira do retorno da Prestes Maia
+        "RETORNO COMPLEXO VIARIO": "RT COMPLEXO VIARIO",
+        "PONTE JURUBATUBA AV INTERLAGOS": "PONTE JURUBATUBA",
 
+        # O pesadelo da Jacu-Pêssego
         "JACU PESSEGO AVENIDA JACUPESSEGO VILA JACUI": "AVENIDA JACU PESSEGO",
         "ACESSO JACU PESSEGO / NOVA TRABALHADORES": "ACESSO AVENIDA JACU PESSEGO",
         "JACUPESSEGO": "JACU PESSEGO",
         "JACU-PESSEGO": "JACU PESSEGO",
+        
+        # O dedo nervoso no Presidente
         "PRESIDENTE PRESIDENTE": "PRESIDENTE",
         "PRES PRESIDENTE": "PRESIDENTE",
         "CASTELLO": "CASTELO",        
+        
+        # =================================================================
+        # 2. RODOVIAS E MARGINAIS (O Bypass para a via expressa)
+        # =================================================================
         "SP 015 - TIETE": "MARGINAL TIETE",
         "SP 015 - PINHEIROS": "MARGINAL PINHEIROS",
         "SP 015 TIETE": "MARGINAL TIETE",
@@ -1079,14 +1122,22 @@ def _padronizar_tipos_complexos(endereco: str) -> str:
         "SP 15 - PINHEIROS": "MARGINAL PINHEIROS",
         "SP 15 TIETE": "MARGINAL TIETE",
         "SP 15 PINHEIROS": "MARGINAL PINHEIROS",
+        
+        # SP-280 forçada para o banco de dados Exato
         "SP 280": "AV MARGINAL DIREITA DO TIETE",
         "SP-280": "AV MARGINAL DIREITA DO TIETE",
+        "RODOVIA SP 280": "AV MARGINAL DIREITA DO TIETE",
+        
+        # =================================================================
+        # 3. ESTRUTURAS ESPECIAIS (Apelidos Famosos)
+        # =================================================================
         "ACESSO PONTE ESTAIADA": "AC A PTE OCTAVIO FRIAS DE OLIVEIRA",
         "AC PONTE ESTAIADA": "AC A PTE OCTAVIO FRIAS DE OLIVEIRA",
         "ACESSO PONTE DO SOCORRO": "AC A PTE SANTO DIAS DA SILVA",
         "AC PONTE DO SOCORRO": "AC A PTE SANTO DIAS DA SILVA",
         "PONTE ESTAIADA": "PONTE OCTAVIO FRIAS DE OLIVEIRA",
         "PONTE DO SOCORRO": "PONTE SANTO DIAS DA SILVA",
+        
         "TUNEL ANHANGABAU": "TN PAPA JOAO PAULO II",
         "TUNEL MARIA MALUF": "COMPLEXO VIARIO MARIA MALUF",
         "TUNEL AYRTON SENNA": "COMPLEXO VIARIO AYRTON SENNA",
@@ -1103,19 +1154,39 @@ def _padronizar_tipos_complexos(endereco: str) -> str:
     
     return end_upper
 
-
 # ========== FUNÇÕES PRINCIPAIS DE INTERFACE ==========
 
 def buscar_endereco_enriquecido(endereco: str, numero: str = "", lat_origem: float = None, lon_origem: float = None, max_candidatos: int = 35) -> pd.DataFrame:
     """
     Busca COMPLETA - com enriquecimento GEOSERVER
+    Agora inclui o Fallback Inteligente de Acessos
     """
+    if pd.isna(endereco) or not str(endereco).strip():
+        return pd.DataFrame([{"logradouro_PMSP": "NAO ENCONTRADO"}])
+        
+    endereco = str(endereco).strip()
     
     # === 1. APLICA A NOSSA REGRA INTELIGENTE AQUI ===
     endereco_corrigido = _padronizar_tipos_complexos(endereco)
     
     # === 2. MANDA O ENDEREÇO CORRIGIDO PARA A BUSCA ===
     df_candidatos = buscar_endereco_candidatos(endereco_corrigido, numero, lat_origem, lon_origem, max_candidatos)
+    
+    # =====================================================================
+    # 🚨 O FALLBACK INTELIGENTE DE "ACESSO"
+    # Se a busca não achou NADA, E a palavra começava com ACESSO...
+    # Nós arrancamos o ACESSO e tentamos a busca exata de novo!
+    # =====================================================================
+    if (df_candidatos.empty or df_candidatos.iloc[0]["logradouro_PMSP"] == "NAO ENCONTRADO") and endereco_corrigido.startswith("ACESSO "):
+        end_sem_acesso = re.sub(r'^ACESSO\s+(PARA A\s+|PARA O\s+|A\s+|DO\s+|DE\s+)?', '', endereco_corrigido).strip()
+        
+        df_candidatos_fallback = buscar_endereco_candidatos(end_sem_acesso, numero, lat_origem, lon_origem, max_candidatos)
+        
+        # Se achou algo bom limpando o "Acesso", a gente substitui o resultado ruim pelo bom!
+        if not df_candidatos_fallback.empty and df_candidatos_fallback.iloc[0]["logradouro_PMSP"] != "NAO ENCONTRADO":
+            df_candidatos_fallback['_fonte_busca'] = 'EXATO_SEM_TIPO'
+            df_candidatos = df_candidatos_fallback
+    # =====================================================================
     
     return enriquecer_candidatos_geoserver(df_candidatos)
 
