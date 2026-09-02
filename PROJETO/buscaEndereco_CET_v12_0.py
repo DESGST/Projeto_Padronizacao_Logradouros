@@ -1092,6 +1092,8 @@ def _padronizar_tipos_complexos(endereco: str) -> str:
         "ACESSO  DO": "ACESSO DO",
         "ACESSO  DE": "ACESSO DE",
         "ACESSO AV JACU PESSEGO  MAUA": "ACESSO AVENIDA JACU PESSEGO",
+        "23 DE MAIO": "AVENIDA 23 DE MAIO",
+        "VINTE E TRES DE MAIO": "AVENIDA 23 DE MAIO",
         
         # Retornos e Pontes com sujeira
         "SENTIDO TUNEL ANHAN": "", # Limpa a sujeira do retorno da Prestes Maia
